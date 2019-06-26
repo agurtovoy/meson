@@ -1883,8 +1883,6 @@ https://gcc.gnu.org/bugzilla/show_bug.cgi?id=47485'''))
         return compiler.get_no_stdinc_args()
 
     def get_compile_debugfile_args(self, compiler, target, objfile):
-        if not isinstance(compiler, VisualStudioLikeCompiler):
-            return []
         # The way MSVC uses PDB files is documented exactly nowhere so
         # the following is what we have been able to decipher via
         # reverse engineering.

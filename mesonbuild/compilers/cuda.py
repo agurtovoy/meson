@@ -13,32 +13,42 @@
 # limitations under the License.
 
 import re, os.path
-
+from functools import partial
+from .. import coredata
 from .. import mlog
-from ..mesonlib import EnvironmentException, MachineChoice, Popen_safe
+from ..mesonlib import EnvironmentException, MachineChoice, Popen_safe, OptionOverrideProxy
 from .compilers import (Compiler, cuda_buildtype_args, cuda_optimization_args,
-                        cuda_debug_args, CompilerType, get_gcc_soname_args)
+                        cuda_debug_args)
+
 
 class CudaCompiler(Compiler):
-    def __init__(self, exelist, version, for_machine: MachineChoice, is_cross, exe_wrapper=None):
+    def __init__(self, exelist, version, for_machine: MachineChoice, is_cross, exe_wrapper, host_compiler):
         if not hasattr(self, 'language'):
             self.language = 'cuda'
         super().__init__(exelist, version, for_machine)
         self.is_cross = is_cross
         self.exe_wrapper = exe_wrapper
+        self.host_compiler = host_compiler
         self.id = 'nvcc'
-        default_warn_args = []
-        self.warn_args = {'0': [],
-                          '1': default_warn_args,
-                          '2': default_warn_args + ['-Xcompiler=-Wextra'],
-                          '3': default_warn_args + ['-Xcompiler=-Wextra',
-                                                    '-Xcompiler=-Wpedantic']}
+        self.warn_args = { level: self._to_host_flags( flags ) for level, flags in host_compiler.warn_args.items() }
+
+    @staticmethod
+    def _to_host_flags(flags, phase='compiler'):
+        return list(map(partial(CudaCompiler._to_host_flag,phase=phase), flags))
+
+    @staticmethod
+    def _to_host_flag(flag, phase):
+        return '-X%s=%s' % (phase, flag)
 
     def needs_static_linker(self):
         return False
 
     def get_always_args(self):
         return []
+#        return self._to_host_flags(self.host_compiler.get_always_args())
+
+    def can_linker_accept_rsp(self):
+        return False
 
     def get_display_language(self):
         return 'Cuda'
@@ -47,7 +57,7 @@ class CudaCompiler(Compiler):
         return []
 
     def thread_link_flags(self, environment):
-        return ['-Xcompiler=-pthread']
+        return self._to_host_flags(self.host_compiler.thread_link_flags(environment))
 
     def sanity_check(self, work_dir, environment):
         mlog.debug('Sanity testing ' + self.get_display_language() + ' compiler:', ' '.join(self.exelist))
@@ -145,6 +155,27 @@ class CudaCompiler(Compiler):
     def get_compiler_check_args(self):
         return super().get_compiler_check_args() + []
 
+    def get_options(self):
+        opts = super().get_options()
+        opts.update({'cuda_std': coredata.UserComboOption('C++ language standard to use',
+                                                         ['none', 'c++03', 'c++11', 'c++14'],
+                                                         'none')})
+        return opts
+
+    def _to_host_compiler_options(self, options):
+        overrides = {name: opt.value for name, opt in options.copy().items()}
+        return OptionOverrideProxy(overrides, self.host_compiler.get_options())
+
+    def get_option_compile_args(self, options):
+        args = []
+        std = options['cuda_std']
+        if std.value != 'none':
+            args.append('--std=' + std.value)
+        return args + self._to_host_flags(self.host_compiler.get_option_compile_args(self._to_host_compiler_options(options)))
+
+    def get_option_link_args(self, options):
+        return self._to_host_flags(self.host_compiler.get_option_link_args(self._to_host_compiler_options(options)), 'linker')
+
     def has_header_symbol(self, hname, symbol, prefix, env, extra_args=None, dependencies=None):
         result, cached = super().has_header_symbol(hname, symbol, prefix, env, extra_args, dependencies)
         if result:
@@ -173,7 +204,7 @@ class CudaCompiler(Compiler):
         return ' '.join(self.exelist)
 
     def get_soname_args(self, *args):
-        rawargs = get_gcc_soname_args(CompilerType.GCC_STANDARD, *args)
+        rawargs = self.host_compiler.get_soname_args(*args)
         return self._cook_link_args(rawargs)
 
     def get_dependency_gen_args(self, outtarget, outfile):
@@ -211,6 +242,12 @@ class CudaCompiler(Compiler):
             path = '.'
         return ['-I' + path]
 
+    def get_compile_debugfile_args(self, rel_obj, **kwargs):
+        return self._to_host_flags(self.host_compiler.get_compile_debugfile_args(rel_obj, **kwargs))
+
+    def get_link_debugfile_args(self, targetfile):
+        return self._to_host_flags(self.host_compiler.get_link_debugfile_args(targetfile), 'linker')
+
     def get_std_shared_lib_link_args(self):
         return ['-shared']
 
@@ -221,13 +258,13 @@ class CudaCompiler(Compiler):
         return 'd'
 
     def get_buildtype_linker_args(self, buildtype):
-        return []
+        return self._to_host_flags(self.host_compiler.get_buildtype_linker_args(buildtype), 'linker')
 
     def get_std_exe_link_args(self):
-        return []
+        return self._to_host_flags(self.host_compiler.get_std_exe_link_args(), 'linker')
 
     def build_rpath_args(self, build_dir, from_dir, rpath_paths, build_rpath, install_rpath):
-        rawargs = self.build_unix_rpath_args(build_dir, from_dir, rpath_paths, build_rpath, install_rpath)
+        rawargs = self.host_compiler.build_rpath_args(build_dir, from_dir, rpath_paths, build_rpath, install_rpath)
         return self._cook_link_args(rawargs)
 
     def get_linker_search_args(self, dirname):
@@ -236,8 +273,14 @@ class CudaCompiler(Compiler):
     def linker_to_compiler_args(self, args):
         return args
 
+    def get_gui_app_args(self, value):
+        return self._to_host_flags(self.host_compiler.get_gui_app_args(value), 'linker')
+
     def get_pic_args(self):
-        return ['-Xcompiler=-fPIC']
+        return self._to_host_flags(self.host_compiler.get_pic_args())
 
     def compute_parameters_with_absolute_paths(self, parameter_list, build_dir):
         return []
+
+    def get_crt_compile_args(self, crt_val, buildtype):
+        return self._to_host_flags(self.host_compiler.get_crt_compile_args(crt_val, buildtype))

@@ -822,6 +822,7 @@ class Environment:
 
     def detect_cuda_compiler(self, for_machine):
         popen_exceptions = {}
+        is_cross = not self.machines.matches_build_machine(for_machine)
         compilers, ccache, exe_wrap = self._get_compilers('cuda', for_machine)
         for compiler in compilers:
             if isinstance(compiler, str):
@@ -850,8 +851,9 @@ class Environment:
             # Luckily, the "V" also makes it very simple to extract
             # the full version:
             version = out.strip().split('V')[-1]
+            cpp_compiler = self.detect_cpp_compiler(for_machine)
             cls = CudaCompiler
-            return cls(ccache + compiler, version, for_machine, exe_wrap)
+            return cls(ccache + compiler, version, for_machine, is_cross, exe_wrap, cpp_compiler)
         raise EnvironmentException('Could not find suitable CUDA compiler: "' + ' '.join(compilers) + '"')
 
     def detect_fortran_compiler(self, for_machine: MachineChoice):
