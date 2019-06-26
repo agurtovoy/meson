@@ -1388,6 +1388,12 @@ class Compiler:
     def remove_linkerlike_args(self, args):
         return [x for x in args if not x.startswith('-Wl')]
 
+    def get_target_link_args(self, target):
+        return target.link_args
+
+    def get_dependency_link_args(self, dep):
+        return dep.get_link_args()
+
 
 @enum.unique
 class CompilerType(enum.Enum):

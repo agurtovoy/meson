@@ -22,6 +22,9 @@ from .compilers import (Compiler, cuda_buildtype_args, cuda_optimization_args,
 
 
 class CudaCompiler(Compiler):
+
+    _universal_flags = { 'compiler': ['-I', '-D', '-U', '-E'], 'linker': ['-l', '-L'] }
+
     def __init__(self, exelist, version, for_machine: MachineChoice, is_cross, exe_wrapper, host_compiler):
         if not hasattr(self, 'language'):
             self.language = 'cuda'
@@ -38,6 +41,8 @@ class CudaCompiler(Compiler):
 
     @staticmethod
     def _to_host_flag(flag, phase):
+        if not flag[0] in ['-', '/'] or flag[:2] in CudaCompiler._universal_flags[phase]:
+            return flag
         return '-X%s=%s' % (phase, flag)
 
     def needs_static_linker(self):
@@ -284,3 +289,9 @@ class CudaCompiler(Compiler):
 
     def get_crt_compile_args(self, crt_val, buildtype):
         return self._to_host_flags(self.host_compiler.get_crt_compile_args(crt_val, buildtype))
+
+    def get_target_link_args(self, target):
+        return self._to_host_flags(super().get_target_link_args(target), 'linker')
+
+    def get_dependency_link_args(self, dep):
+        return self._to_host_flags(super().get_dependency_link_args(dep), 'linker')
