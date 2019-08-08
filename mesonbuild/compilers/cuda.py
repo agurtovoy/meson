@@ -24,6 +24,13 @@ from .compilers import (Compiler, cuda_buildtype_args, cuda_optimization_args,
 class CudaCompiler(Compiler):
 
     _universal_flags = { 'compiler': ['-I', '-D', '-U', '-E'], 'linker': ['-l', '-L'] }
+    _crt_args = {
+        'none': ['--cudart=none'],
+        'md': ['--cudart=shared'],
+        'mdd': ['--cudart=shared'],
+        'mt': ['--cudart=static'],
+        'mtd': ['--cudart=static'],
+        }
 
     def __init__(self, exelist, version, for_machine: MachineChoice, is_cross, exe_wrapper, host_compiler):
         if not hasattr(self, 'language'):
@@ -34,6 +41,7 @@ class CudaCompiler(Compiler):
         self.host_compiler = host_compiler
         self.id = 'nvcc'
         self.warn_args = { level: self._to_host_flags( flags ) for level, flags in host_compiler.warn_args.items() }
+        self.ccbin = os.environ.get('NVCC_CCBIN', None)
 
     @staticmethod
     def _to_host_flags(flags, phase='compiler'):
@@ -49,7 +57,7 @@ class CudaCompiler(Compiler):
         return False
 
     def get_always_args(self):
-        return []
+        return [] if self.ccbin is None else [ '-ccbin=%s' % self.ccbin ]
 #        return self._to_host_flags(self.host_compiler.get_always_args())
 
     def can_linker_accept_rsp(self):
@@ -109,6 +117,7 @@ class CudaCompiler(Compiler):
         # builds; For cross builds we must still use the exe_wrapper (if any).
         self.detected_cc = ''
         flags = ['-w', '-cudart', 'static', source_name]
+        flags += self.get_always_args()
         if self.is_cross and self.exe_wrapper is None:
             # Linking cross built apps is painful. You can't really
             # tell if you should use -nostdlib or not and for example
@@ -137,7 +146,7 @@ class CudaCompiler(Compiler):
             else:
                 cmdlist = self.exe_wrapper + [binary_name]
         else:
-            cmdlist = self.exelist + ['--run', '"' + binary_name + '"']
+            cmdlist = self.exelist + self.get_always_args() + ['--run', '"' + binary_name + '"']
         mlog.debug('Sanity check run command line: ', ' '.join(cmdlist))
         pe, stdo, stde = Popen_safe(cmdlist, cwd=work_dir)
         mlog.debug('Sanity check run stdout: ')
@@ -288,7 +297,24 @@ class CudaCompiler(Compiler):
         return []
 
     def get_crt_compile_args(self, crt_val, buildtype):
-        return self._to_host_flags(self.host_compiler.get_crt_compile_args(crt_val, buildtype))
+        nvcc_flags = self._get_nvcc_crt_compile_args(crt_val, buildtype)
+        return nvcc_flags + self._to_host_flags(self.host_compiler.get_crt_compile_args(crt_val, buildtype))
+
+    def _get_nvcc_crt_compile_args(self, crt_val, buildtype):
+        if crt_val in self._crt_args:
+            return self._crt_args[crt_val]
+        assert(crt_val == 'from_buildtype')
+        if buildtype == 'plain':
+            return self._crt_args['none']
+        elif buildtype == 'debug':
+            return self._crt_args['mdd']
+        elif buildtype == 'debugoptimized':
+            return self._crt_args['md']
+        elif buildtype == 'release':
+            return self._crt_args['md']
+        elif buildtype == 'minsize':
+            return self._crt_args['md']
+        else: return []
 
     def get_target_link_args(self, target):
         return self._to_host_flags(super().get_target_link_args(target), 'linker')

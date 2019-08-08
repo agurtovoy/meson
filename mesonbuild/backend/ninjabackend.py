@@ -252,14 +252,18 @@ int dummy;
                                '/showIncludes', '/c', 'incdetect.c'],
                               cwd=self.environment.get_scratch_dir(),
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        (stdo, _) = pc.communicate()
+        (stdout, stderr) = pc.communicate()
+
+        # Some cl wrappers (e.g. Squish Coco) output dependency info 
+        # to stderr rather than stdout
+        out = stdout if re.match(rb'^incdetect.c\r?\n', stdout) else stderr
 
         # We want to match 'Note: including file: ' in the line
         # 'Note: including file: d:\MyDir\include\stdio.h', however
         # different locales have different messages with a different
         # number of colons. Match up to the the drive name 'd:\'.
         matchre = re.compile(rb"^(.*\s)[a-zA-Z]:\\.*stdio.h$")
-        for line in re.split(rb'\r?\n', stdo):
+        for line in re.split(rb'\r?\n', out):
             match = matchre.match(line)
             if match:
                 with open(tempfilename, 'ab') as binfile:
@@ -2385,7 +2389,7 @@ https://gcc.gnu.org/bugzilla/show_bug.cgi?id=47485'''))
 
         build_dir = self.environment.get_build_dir()
         # the following loop sometimes consumes two items from command in one pass
-        it = iter(commands)
+        it = iter(linker.native_link_args_to_unix(commands) if hasattr(linker, 'native_link_args_to_unix') else commands)
         for item in it:
             if item in internal and not item.startswith('-'):
                 continue
@@ -2468,26 +2472,35 @@ https://gcc.gnu.org/bugzilla/show_bug.cgi?id=47485'''))
         commands += linker.get_linker_always_args()
         # Add buildtype linker args: optimization level, etc.
         commands += linker.get_buildtype_linker_args(self.get_option_for_target('buildtype', target))
+        print('@@ commands 1', commands)
         # Add /DEBUG and the pdb filename when using MSVC
         if self.get_option_for_target('debug', target):
             commands += self.get_link_debugfile_args(linker, target, outname)
+
+        print('@@ commands 2', commands)
         # Add link args specific to this BuildTarget type, such as soname args,
         # PIC, import library generation, etc.
         commands += self.get_target_type_link_args(target, linker)
+        print('@@ commands 3', commands)
+
         # Archives that are copied wholesale in the result. Must be before any
         # other link targets so missing symbols from whole archives are found in those.
         if not isinstance(target, build.StaticLibrary):
             commands += self.get_link_whole_args(linker, target)
+        print('@@ commands 4', commands)
 
         if not isinstance(target, build.StaticLibrary):
             # Add link args added using add_project_link_arguments()
             commands += self.build.get_project_link_args(linker, target.subproject, target.for_machine)
+            print('@@ commands 5', commands)
             # Add link args added using add_global_link_arguments()
             # These override per-project link arguments
             commands += self.build.get_global_link_args(linker, target.for_machine)
+            print('@@ commands 6', commands)
             # Link args added from the env: LDFLAGS. We want these to override
             # all the defaults but not the per-target link args.
             commands += self.environment.coredata.get_external_link_args(target.for_machine, linker.get_language())
+            print('@@ commands 7', commands)
 
         # Now we will add libraries and library paths from various sources
 
@@ -2502,24 +2515,34 @@ https://gcc.gnu.org/bugzilla/show_bug.cgi?id=47485'''))
             dependencies = target.get_dependencies()
         internal = self.build_target_link_arguments(linker, dependencies)
         commands += internal
+        print('@@ commands 8', commands)
+
         # Only non-static built targets need link args and link dependencies
         if not isinstance(target, build.StaticLibrary):
             # For 'automagic' deps: Boost and GTest. Also dependency('threads').
             # pkg-config puts the thread flags itself via `Cflags:`
 
             commands += linker.get_target_link_args(target)
+            print('@@ commands 9', commands)
+
             # External deps must be last because target link libraries may depend on them.
             for dep in target.get_external_deps():
                 # Extend without reordering or de-dup to preserve `-L -l` sets
                 # https://github.com/mesonbuild/meson/issues/1718
                 commands.extend_preserving_lflags(linker.get_dependency_link_args(dep))
+
+            print('@@ commands 10', commands)
+
             for d in target.get_dependencies():
                 if isinstance(d, build.StaticLibrary):
                     for dep in d.get_external_deps():
                         commands.extend_preserving_lflags(linker.get_dependency_link_args(dep))
 
+            print('@@ commands 11', commands)
+
         # Add link args specific to this BuildTarget type that must not be overridden by dependencies
         commands += self.get_target_type_link_args_post_dependencies(target, linker)
+        print('@@ commands 12', commands)
 
         # Add link args for c_* or cpp_* build options. Currently this only
         # adds c_winlibs and cpp_winlibs when building for Windows. This needs
@@ -2527,6 +2550,7 @@ https://gcc.gnu.org/bugzilla/show_bug.cgi?id=47485'''))
         # symbols from those can be found here. This is needed when the
         # *_winlibs that we want to link to are static mingw64 libraries.
         commands += linker.get_option_link_args(self.environment.coredata.compiler_options[target.for_machine])
+        print('@@ commands 13', commands)
 
         dep_targets = []
         dep_targets.extend(self.guess_external_link_dependencies(linker, target, commands, internal))

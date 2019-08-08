@@ -365,7 +365,8 @@ cuda_optimization_args = {'0': [],
                           'g': ['-O0'],
                           '1': ['-O1'],
                           '2': ['-O2'],
-                          '3': ['-O3', '-Otime'],
+                          '3': ['-O3'],
+                        #   '3': ['-O3', '-Otime'],
                           's': ['-O3', '-Ospace']
                           }
 
@@ -1018,7 +1019,8 @@ class Compiler:
             env_link_flags = None
         log_var('LDFLAGS', env_link_flags)
         if env_link_flags is not None:
-            link_flags += shlex.split(env_link_flags)
+            link_flags += shlex.split(env_link_flags, posix=False)
+
         if compiler_is_linker:
             # When the compiler is used as a wrapper around the linker (such as
             # with GCC and Clang), the compile flags can be needed while linking
@@ -1657,6 +1659,17 @@ class VisualStudioLikeCompiler(metaclass=abc.ABCMeta):
     def linker_to_compiler_args(self, args):
         return ['/link'] + args
 
+    def native_link_args_to_unix(self, args):
+        result = []
+        for arg in args:
+            if arg.startswith(('/LIBPATH:', '-LIBPATH:')):
+                result.append('-L' + arg[9:])
+            elif arg.endswith(('.a', '.lib')) and not os.path.isabs(arg):
+                result.append('-l' + arg)
+            else:
+                result.append(arg)
+        return result
+
     def get_gui_app_args(self, value):
         # the default is for the linker to guess the subsystem based on presence
         # of main or WinMain symbols, so always be explicit
@@ -1710,7 +1723,9 @@ class VisualStudioLikeCompiler(metaclass=abc.ABCMeta):
             # -pthread is only valid for GCC
             if i in ('-mms-bitfields', '-pthread'):
                 continue
-            if i.startswith('-L'):
+            if i.startswith('-LIBPATH'):
+                i = '/LIBPATH:' + i[9:]
+            elif i.startswith('-L'):
                 i = '/LIBPATH:' + i[2:]
             # Translate GNU-style -lfoo library name to the import library
             elif i.startswith('-l'):
